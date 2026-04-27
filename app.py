@@ -1,20 +1,57 @@
 from flask import Flask, request, jsonify
 import sqlite3
+import random
 
 app = Flask(__name__)
 
+# -------- DB --------
 def db():
     return sqlite3.connect("app.db")
 
-# -------- DB --------
 conn = db()
 c = conn.cursor()
 
+c.execute("CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, phone TEXT, code TEXT)")
 c.execute("CREATE TABLE IF NOT EXISTS rides(id INTEGER PRIMARY KEY, user TEXT, f TEXT, t TEXT, time TEXT)")
 conn.commit()
 conn.close()
 
-# -------- API --------
+# -------- AUTH --------
+@app.route("/send_code", methods=["POST"])
+def send_code():
+    data = request.json
+    phone = data["phone"]
+    code = str(random.randint(1000, 9999))
+
+    conn = db()
+    c = conn.cursor()
+    c.execute("INSERT INTO users(phone,code) VALUES(?,?)", (phone, code))
+    conn.commit()
+    conn.close()
+
+    print("CODE:", code)  # смотри в Render logs
+
+    return jsonify({"ok":1})
+
+@app.route("/verify", methods=["POST"])
+def verify():
+    data = request.json
+    phone = data["phone"]
+    code = data["code"]
+
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT code FROM users WHERE phone=? ORDER BY id DESC", (phone,))
+    real = c.fetchone()
+
+    conn.close()
+
+    if real and real[0] == code:
+        return jsonify({"ok":1})
+
+    return jsonify({"ok":0})
+
+# -------- RIDES --------
 @app.route("/add", methods=["POST"])
 def add():
     data = request.json
@@ -56,9 +93,10 @@ body {
     background-size:cover;
 }
 
-.container {
+.box {
     backdrop-filter: blur(10px);
     padding:20px;
+    text-align:center;
 }
 
 input, button {
@@ -75,9 +113,7 @@ button {
     transition:0.3s;
 }
 
-button:hover {
-    transform:scale(1.05);
-}
+button:hover { transform:scale(1.05); }
 
 .card {
     background:rgba(0,0,0,0.5);
@@ -92,55 +128,87 @@ button:hover {
     to {opacity:1;}
 }
 
-#map {
-    height:300px;
-    margin-top:20px;
-    border-radius:10px;
-}
+#map { height:300px; margin-top:20px; border-radius:10px; }
 </style>
 </head>
 
 <body>
 
-<div class="container">
+<div class="box">
 
-<h1>🚗 RideShare</h1>
+<h2>📱 Регистрация</h2>
 
-<input id="user" placeholder="Name">
+<input id="phone" placeholder="+998...">
+<button onclick="sendCode()">Отправить код</button>
 
-<h3>Создать поездку</h3>
+<br>
+
+<input id="code" placeholder="Код">
+<button onclick="login()">Войти</button>
+
+<hr>
+
+<div id="app" style="display:none">
+
+<h2>🚗 RideShare</h2>
+
 <input id="from" placeholder="From">
 <input id="to" placeholder="To">
 <input type="datetime-local" id="time">
 
-<button onclick="addRide()">Создать</button>
+<button onclick="addRide()">Создать поездку</button>
 
-<h3>Поездки</h3>
 <div id="rides"></div>
 
 <div id="map"></div>
 
 </div>
 
+</div>
+
 <script>
+var user = "";
 
-var map = L.map('map').setView([41.31,69.27],11);
+// 📱 код
+function sendCode(){
+    fetch("/send_code",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+            phone:document.getElementById("phone").value
+        })
+    });
+    alert("Код отправлен (смотри в Render logs)");
+}
 
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png')
-.addTo(map);
+// 🔐 вход
+function login(){
+    fetch("/verify",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+            phone:document.getElementById("phone").value,
+            code:document.getElementById("code").value
+        })
+    })
+    .then(r=>r.json())
+    .then(data=>{
+        if(data.ok){
+            user = document.getElementById("phone").value;
+            document.getElementById("app").style.display="block";
+        } else {
+            alert("Неверный код");
+        }
+    });
+}
 
-// 📍 GPS
-navigator.geolocation.getCurrentPosition(pos=>{
-    L.marker([pos.coords.latitude,pos.coords.longitude])
-    .addTo(map).bindPopup("You");
-});
-
+// 🚗 поездка
 function addRide(){
     fetch("/add",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify({
-            user:document.getElementById("user").value,
+            user:user,
             from:document.getElementById("from").value,
             to:document.getElementById("to").value,
             time:document.getElementById("time").value
@@ -148,28 +216,36 @@ function addRide(){
     });
 }
 
+// 📍 карта
+var map = L.map('map').setView([41.31,69.27],11);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png')
+.addTo(map);
+
+navigator.geolocation.getCurrentPosition(pos=>{
+    L.marker([pos.coords.latitude,pos.coords.longitude])
+    .addTo(map).bindPopup("You");
+});
+
+// 🔄 обновление
 function load(){
     fetch("/rides").then(r=>r.json()).then(data=>{
         let html="";
         data.forEach((r,i)=>{
-            html += `
-            <div class="card">
-            👤 ${r[1]} <br>
+            html += `<div class="card">
             📍 ${r[2]} → ${r[3]} <br>
             ⏰ ${r[4]}
             </div>`;
 
             let lat = 41.31 + i*0.02;
             let lng = 69.27 + i*0.02;
-
             L.marker([lat,lng]).addTo(map);
         });
-
         document.getElementById("rides").innerHTML = html;
     });
 }
 
-setInterval(load, 2000);
+setInterval(load,2000);
 
 </script>
 
