@@ -12,7 +12,17 @@ conn = db()
 c = conn.cursor()
 
 c.execute("CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, phone TEXT, code TEXT)")
-c.execute("CREATE TABLE IF NOT EXISTS rides(id INTEGER PRIMARY KEY, user TEXT, f TEXT, t TEXT, time TEXT)")
+c.execute("""
+CREATE TABLE IF NOT EXISTS rides(
+    id INTEGER PRIMARY KEY,
+    driver TEXT,
+    f TEXT,
+    t TEXT,
+    time TEXT,
+    passengers TEXT
+)
+""")
+
 conn.commit()
 conn.close()
 
@@ -29,7 +39,7 @@ def send_code():
     conn.commit()
     conn.close()
 
-    print("CODE:", code)  # смотри в Render logs
+    print("CODE:", code)
 
     return jsonify({"ok":1})
 
@@ -42,13 +52,11 @@ def verify():
     conn = db()
     c = conn.cursor()
     c.execute("SELECT code FROM users WHERE phone=? ORDER BY id DESC", (phone,))
-    real = c.fetchone()
-
+    row = c.fetchone()
     conn.close()
 
-    if real and real[0] == code:
+    if row and row[0] == code:
         return jsonify({"ok":1})
-
     return jsonify({"ok":0})
 
 # -------- RIDES --------
@@ -57,10 +65,39 @@ def add():
     data = request.json
     conn = db()
     c = conn.cursor()
-    c.execute("INSERT INTO rides(user,f,t,time) VALUES(?,?,?,?)",
-              (data["user"], data["from"], data["to"], data["time"]))
+
+    c.execute("""
+    INSERT INTO rides(driver,f,t,time,passengers)
+    VALUES (?,?,?,?,?)
+    """, (data["user"], data["from"], data["to"], data["time"], ""))
+
     conn.commit()
     conn.close()
+    return jsonify({"ok":1})
+
+@app.route("/join", methods=["POST"])
+def join():
+    data = request.json
+    ride_id = data["ride_id"]
+    user = data["user"]
+
+    conn = db()
+    c = conn.cursor()
+
+    c.execute("SELECT passengers FROM rides WHERE id=?", (ride_id,))
+    row = c.fetchone()
+
+    passengers = row[0] or ""
+
+    if user not in passengers:
+        passengers += user + ","
+
+    c.execute("UPDATE rides SET passengers=? WHERE id=?",
+              (passengers, ride_id))
+
+    conn.commit()
+    conn.close()
+
     return jsonify({"ok":1})
 
 @app.route("/rides")
@@ -178,7 +215,7 @@ function sendCode(){
             phone:document.getElementById("phone").value
         })
     });
-    alert("Код отправлен (смотри в Render logs)");
+    alert("Код смотри в Render Logs");
 }
 
 // 🔐 вход
@@ -202,7 +239,7 @@ function login(){
     });
 }
 
-// 🚗 поездка
+// 🚗 создать
 function addRide(){
     fetch("/add",{
         method:"POST",
@@ -212,6 +249,18 @@ function addRide(){
             from:document.getElementById("from").value,
             to:document.getElementById("to").value,
             time:document.getElementById("time").value
+        })
+    });
+}
+
+// 🚗 попутчик
+function joinRide(id){
+    fetch("/join",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+            ride_id:id,
+            user:user
         })
     });
 }
@@ -233,8 +282,14 @@ function load(){
         let html="";
         data.forEach((r,i)=>{
             html += `<div class="card">
+            🚗 Водитель: ${r[1]} <br>
             📍 ${r[2]} → ${r[3]} <br>
-            ⏰ ${r[4]}
+            ⏰ ${r[4]} <br>
+            👥 ${r[5] || "нет пассажиров"} <br><br>
+
+            <button onclick="joinRide(${r[0]})">
+            🚗 Поехать
+            </button>
             </div>`;
 
             let lat = 41.31 + i*0.02;
